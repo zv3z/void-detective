@@ -20,7 +20,7 @@ function NotFoundComponent() {
         <div className="font-mono text-cyan text-sm mb-2">ERR_404 · NOT_FOUND</div>
         <h1 className="text-6xl font-bold glow-text-cyan">404</h1>
         <h2 className="mt-3 text-lg">المورد غير موجود</h2>
-        <p className="mt-2 text-sm text-muted-foreground">المسار المطلوب لا يوجد ضمن نظام DFAS.</p>
+        <p className="mt-2 text-sm text-muted-foreground">المسار المطلوب لا يوجد ضمن نظام VoidSINT.</p>
         <Link to="/" className="inline-flex mt-6 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground font-medium glow-cyan">
           العودة للرئيسية
         </Link>
@@ -52,11 +52,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "DFAS v3 — نظام التحليل الجنائي الرقمي" },
-      { name: "description", content: "DFAS — منصة تحليل جنائي رقمي وتعليم الأمن السيبراني." },
-      { name: "author", content: "DFAS" },
-      { property: "og:title", content: "DFAS v3 — Digital Forensics Analysis System" },
-      { property: "og:description", content: "Arabic-first cybersecurity forensics dashboard." },
+      { title: "VoidSINT — منصة التحقيق والاستخبارات المفتوحة" },
+      { name: "description", content: "VoidSINT — منصة OSINT احترافية للتحقيق عبر 8 محركات: أسماء المستخدمين، البريد، IP، النطاقات، الهاتف، العملات الرقمية، الأشخاص، ومؤشرات الاختراق." },
+      { property: "og:title", content: "VoidSINT — Open Source Intelligence Platform" },
+      { property: "og:description", content: "منصة OSINT عربية احترافية — 8 محركات تحقيق متكاملة." },
       { property: "og:type", content: "website" },
     ],
     links: [
@@ -91,7 +90,7 @@ function RootComponent() {
           <TopBar onMenu={() => setOpen(true)} />
           <main className="flex-1"><Outlet /></main>
           <footer className="px-6 py-4 text-center text-[11px] text-muted-foreground font-mono border-t border-border">
-            DFAS v3.0 · ISO/IEC 27037 · NIST 800-86 · RFC 3227 · TLP:AMBER
+            VoidSINT v1.0 · OSINT Platform · مستوحاة من Flowsint · للأغراض التعليمية والبحثية · TLP:AMBER
           </footer>
         </div>
       </div>

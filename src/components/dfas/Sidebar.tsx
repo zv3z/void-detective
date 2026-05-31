@@ -33,12 +33,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       >
         <div className="p-5 border-b border-border">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-info flex items-center justify-center font-mono font-bold glow-cyan">
-              DF
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-cyan flex items-center justify-center font-mono font-bold text-sm glow-cyan">
+              VS
             </div>
             <div>
-              <div className="font-bold tracking-wider glow-text-cyan">DFAS</div>
-              <div className="text-[10px] text-muted-foreground font-mono">v3.0 · TLP:AMBER</div>
+              <div className="font-bold tracking-wider glow-text-cyan">VoidSINT</div>
+              <div className="text-[10px] text-muted-foreground font-mono">v1.0 · OSINT · TLP:AMBER</div>
             </div>
           </div>
         </div>

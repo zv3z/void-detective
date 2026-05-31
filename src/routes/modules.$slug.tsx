@@ -1,8 +1,7 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { MODULES, type ModuleDef } from "@/lib/dfas-data";
-import { RiskGauge, SeverityBadge, type Severity } from "@/components/dfas/ui";
-import { runEngine, SAMPLES, type AnalysisResult, type FindingItem } from "@/engines/runner";
+import { runInvestigation, SAMPLES, type InvestigationResult, type Finding, type PlatformResult, type ExternalLink, type ExtractedIOC } from "@/engines/osint-engines";
 
 export const Route = createFileRoute("/modules/$slug")({
   loader: ({ params }) => {
@@ -11,16 +10,20 @@ export const Route = createFileRoute("/modules/$slug")({
     return { mod };
   },
   head: ({ loaderData }) => ({
-    meta: loaderData?.mod ? [
-      { title: `DFAS · ${loaderData.mod.nameAr}` },
-      { name: "description", content: loaderData.mod.descAr },
-    ] : [{ title: "DFAS · وحدة" }],
+    meta: loaderData?.mod
+      ? [
+          { title: `VoidSINT · ${loaderData.mod.nameAr}` },
+          { name: "description", content: loaderData.mod.descAr },
+        ]
+      : [{ title: "VoidSINT · تحقيق" }],
   }),
   notFoundComponent: () => (
     <div className="px-6 py-20 text-center">
-      <div className="font-mono text-cyan text-xs">MOD · NOT_FOUND</div>
-      <h1 className="text-3xl font-bold mt-2">الوحدة غير موجودة</h1>
-      <Link to="/modules" className="inline-flex mt-6 px-4 py-2 rounded-lg bg-primary text-primary-foreground">عودة للوحدات</Link>
+      <div className="font-mono text-cyan text-xs">OSINT · ENGINE_NOT_FOUND</div>
+      <h1 className="text-3xl font-bold mt-2">المحرك غير موجود</h1>
+      <Link to="/modules" className="inline-flex mt-6 px-4 py-2 rounded-lg bg-primary text-primary-foreground">
+        عودة لمحركات التحقيق
+      </Link>
     </div>
   ),
   component: ModulePage,
@@ -28,170 +31,165 @@ export const Route = createFileRoute("/modules/$slug")({
 
 type Phase = "idle" | "running" | "done";
 
+const STATUS_STYLES: Record<string, string> = {
+  info:    "text-info border-info/30 bg-info/8",
+  success: "text-safe border-safe/30 bg-safe/8",
+  warning: "text-warning border-warning/30 bg-warning/8",
+  danger:  "text-critical border-critical/30 bg-critical/8",
+  neutral: "text-muted-foreground border-border bg-surface-2/50",
+};
+
+const CATEGORY_COLORS = [
+  "bg-cyan/10 text-cyan border-cyan/30",
+  "bg-info/10 text-info border-info/30",
+  "bg-safe/10 text-safe border-safe/30",
+  "bg-warning/10 text-warning border-warning/30",
+  "bg-high/10 text-high border-high/30",
+];
+
 function ModulePage() {
   const { mod } = Route.useLoaderData();
-  return <ModuleView mod={mod} />;
+  return <InvestigationView mod={mod} />;
 }
 
-const STEPS = ["تحقّق من المدخل", "استخراج المؤشرات", "مقارنة قواعد البيانات", "تقييم المخاطر", "توليد التقرير"];
-
-function ModuleView({ mod }: { mod: ModuleDef }) {
+function InvestigationView({ mod }: { mod: ModuleDef }) {
   const [phase, setPhase] = useState<Phase>("idle");
-  const [step, setStep] = useState(0);
-  const [fileName, setFileName] = useState<string | null>(null);
   const [input, setInput] = useState("");
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const fileRef = useRef<File | null>(null);
+  const [result, setResult] = useState<InvestigationResult | null>(null);
+  const [step, setStep] = useState(0);
 
-  function loadSample() {
-    const sample = SAMPLES[mod.slug];
-    if (sample) setInput(sample);
-  }
+  const steps = mod.slug === "ioc"
+    ? ["استخراج IPs", "استخراج النطاقات", "استخراج البريد", "استخراج الهاشات", "استخراج العملات", "استخراج CVEs"]
+    : ["التحقق من المدخل", "تطبيع البيانات", "تحليل الكيان", "تجهيز الروابط", "توليد التقرير"];
 
-  async function analyze() {
-    const isImageDemo = (mod.slug === "image" || mod.slug === "stego") && !fileRef.current;
-    if (!input.trim() && !fileRef.current && !isImageDemo) return;
+  async function investigate() {
+    if (!input.trim()) return;
     setPhase("running");
     setStep(0);
-    setError(null);
     setResult(null);
 
-    // Animate steps
     let i = 0;
-    const stepTimer = setInterval(() => {
+    const timer = setInterval(() => {
       i++;
       setStep(i);
-      if (i >= STEPS.length) clearInterval(stepTimer);
-    }, 450);
+      if (i >= steps.length) clearInterval(timer);
+    }, 380);
 
-    try {
-      const res = await runEngine(mod.slug, input, fileRef.current);
-      // Wait for animation to finish
-      await new Promise(r => setTimeout(r, STEPS.length * 450 + 200));
-      setResult(res);
-      setPhase("done");
-    } catch (e: any) {
-      clearInterval(stepTimer);
-      setError(e?.message || "حدث خطأ أثناء التحليل");
-      setPhase("idle");
-    }
+    await new Promise((r) => setTimeout(r, steps.length * 380 + 200));
+    clearInterval(timer);
+
+    const res = runInvestigation(mod.type, input);
+    setResult(res);
+    setPhase("done");
   }
 
   function reset() {
     setPhase("idle");
     setInput("");
-    setFileName(null);
     setResult(null);
-    setError(null);
-    fileRef.current = null;
+    setStep(0);
+  }
+
+  function loadSample() {
+    setInput(SAMPLES[mod.type] ?? "");
+  }
+
+  function addToGraph() {
+    try {
+      const raw = localStorage.getItem("voidsinт-graph") ?? "{}";
+      const graph = JSON.parse(raw);
+      if (!graph.nodes) graph.nodes = [];
+      if (!graph.edges) graph.edges = [];
+      const id = `${mod.type}-${Date.now()}`;
+      graph.nodes.push({
+        id,
+        type: mod.type,
+        value: input,
+        label: input.substring(0, 20),
+        x: 200 + Math.random() * 400,
+        y: 150 + Math.random() * 300,
+        hue: mod.hue,
+        icon: mod.icon,
+        addedAt: new Date().toISOString(),
+      });
+      localStorage.setItem("voidsinт-graph", JSON.stringify(graph));
+      alert("✓ تم إضافة الكيان إلى خريطة الروابط");
+    } catch {
+      alert("تعذّر الإضافة إلى الخريطة");
+    }
   }
 
   return (
     <div className="px-6 lg:px-12 py-8 max-w-7xl mx-auto space-y-6">
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="glass rounded-xl p-6 flex items-start gap-4 animate-fade-up relative overflow-hidden">
-        <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-primary/20 blur-3xl" />
-        <div className="w-14 h-14 rounded-lg bg-surface-2 grid place-items-center text-3xl glow-border shrink-0">{mod.icon}</div>
-        <div className="flex-1 min-w-0">
+        <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-primary/15 blur-3xl" />
+        <div className={`relative w-14 h-14 rounded-xl border flex items-center justify-center text-3xl shrink-0 border-${mod.hue}/40 bg-${mod.hue}/10 text-${mod.hue}`}>
+          {mod.icon}
+        </div>
+        <div className="flex-1 min-w-0 relative">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/30">{mod.code}</span>
-            <span className="text-[10px] font-mono text-muted-foreground">FORENSIC · MODULE · LIVE ENGINE</span>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/30">{mod.badge}</span>
+            <span className="text-[10px] font-mono text-muted-foreground">OSINT · ENGINE · LIVE</span>
           </div>
           <h1 className="text-2xl font-bold mt-2">{mod.nameAr}</h1>
           <p className="text-sm text-muted-foreground mt-1">{mod.descAr}</p>
         </div>
-        <Link to="/modules" className="hidden sm:inline-flex text-xs text-muted-foreground hover:text-foreground">→ الوحدات</Link>
+        <Link to="/modules" className="hidden sm:inline-flex text-xs text-muted-foreground hover:text-foreground shrink-0">
+          → المحركات
+        </Link>
       </div>
 
-      {/* ── Input ── */}
+      {/* Input */}
       <div className="glass rounded-xl p-6 animate-fade-up" style={{ animationDelay: ".05s" }}>
         <h2 className="font-semibold mb-4 flex items-center gap-2">
           <span className="w-1 h-4 bg-primary rounded glow-cyan" />
-          المدخلات
+          الهدف
         </h2>
 
-        {(mod.inputType === "text" || mod.inputType === "headers" || mod.inputType === "url") && (
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={mod.placeholder}
-            rows={mod.inputType === "url" ? 2 : 7}
-            className="w-full bg-surface-2 border border-border rounded-lg p-4 text-sm font-mono focus:outline-none focus:border-primary transition resize-none"
-            dir={mod.inputType === "url" ? "ltr" : "auto"}
-          />
-        )}
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={mod.placeholder}
+          rows={mod.slug === "ioc" ? 6 : 2}
+          dir={mod.slug === "person" ? "auto" : "ltr"}
+          className="w-full bg-surface-2 border border-border rounded-lg p-4 text-sm font-mono focus:outline-none focus:border-primary transition resize-none"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && mod.slug !== "ioc") {
+              e.preventDefault();
+              investigate();
+            }
+          }}
+        />
 
-        {(mod.inputType === "image" || mod.inputType === "file" || mod.inputType === "log") && (
-          <label className="block">
-            <input
-              type="file"
-              className="hidden"
-              accept={mod.inputType === "image" ? "image/*" : undefined}
-              onChange={(e) => {
-                const f = e.target.files?.[0] ?? null;
-                fileRef.current = f;
-                setFileName(f?.name ?? null);
-                setInput(f?.name ?? "");
-              }}
-            />
-            <div className="border-2 border-dashed border-border rounded-lg p-10 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition group">
-              <div className="text-4xl mb-3 opacity-70 group-hover:scale-110 transition">⤓</div>
-              <div className="font-medium">{fileName ?? "اسحب الملف هنا أو انقر للرفع"}</div>
-              <div className="text-xs text-muted-foreground mt-1.5">
-                {mod.inputType === "image" ? "PNG, JPG, WEBP حتى 20MB" : mod.inputType === "log" ? "access.log, error.log, syslog" : "أي ملف ثنائي أو نصي"}
-              </div>
-            </div>
-          </label>
-        )}
-
-        <div className="mt-5 flex items-center gap-3 flex-wrap">
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <button
-            onClick={analyze}
-            disabled={phase === "running" || (!input.trim() && !fileRef.current && mod.inputType !== "image")}
+            onClick={investigate}
+            disabled={phase === "running" || !input.trim()}
             className="px-6 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold glow-cyan hover:scale-[1.02] transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {phase === "running" ? "جاري التحليل…" : "▶ تشغيل التحليل"}
+            {phase === "running" ? "جاري التحقيق…" : "▶ بدء التحقيق"}
           </button>
-          {SAMPLES[mod.slug] && (
-            <button onClick={loadSample} className="px-4 py-2.5 rounded-lg border border-primary/30 text-primary text-sm hover:bg-primary/10 transition">
-              ← تحميل مثال
-            </button>
-          )}
-          {(mod.slug === "image" || mod.slug === "stego") && !fileRef.current && (
-            <button
-              onClick={analyze}
-              disabled={phase === "running"}
-              className="px-4 py-2.5 rounded-lg border border-warning/40 text-warning text-sm hover:bg-warning/10 transition"
-            >
-              ⚗ تحليل نموذجي
-            </button>
-          )}
+          <button onClick={loadSample} className="px-4 py-2.5 rounded-lg border border-primary/30 text-primary text-sm hover:bg-primary/10 transition">
+            ← تحميل مثال
+          </button>
           <button onClick={reset} className="px-4 py-2.5 rounded-lg border border-border text-sm hover:bg-surface-2 transition">
             إعادة تعيين
           </button>
         </div>
 
-        {error && (
-          <div className="mt-4 p-3 rounded-lg bg-critical/10 border border-critical/30 text-critical text-sm">{error}</div>
-        )}
-
+        {/* Progress */}
         {phase !== "idle" && (
           <div className="mt-5 space-y-2">
             <div className="h-1.5 bg-surface-2 rounded-full overflow-hidden">
               <div
-                className="h-full bg-gradient-to-l from-primary to-info transition-all duration-500"
-                style={{ width: `${(step / STEPS.length) * 100}%` }}
+                className="h-full bg-gradient-to-l from-primary to-cyan transition-all duration-500"
+                style={{ width: `${(step / steps.length) * 100}%` }}
               />
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px]">
-              {STEPS.map((s, i) => (
-                <div
-                  key={s}
-                  className={`flex items-center gap-1.5 ${
-                    i < step ? "text-safe" : i === step && phase === "running" ? "text-cyan" : "text-muted-foreground"
-                  }`}
-                >
+              {steps.map((s, i) => (
+                <div key={s} className={`flex items-center gap-1.5 ${i < step ? "text-safe" : i === step && phase === "running" ? "text-cyan" : "text-muted-foreground"}`}>
                   <span className="w-1.5 h-1.5 rounded-full bg-current" />
                   {s}
                 </div>
@@ -201,22 +199,13 @@ function ModuleView({ mod }: { mod: ModuleDef }) {
         )}
       </div>
 
-      {/* ── Results ── */}
+      {/* Results */}
       {phase === "done" && result && (
         <>
-          {/* Verdict + Gauge */}
+          {/* Validity + Summary */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 animate-fade-up">
-            <VerdictCard result={result} />
-            <div className="glass rounded-xl p-6 flex flex-col items-center justify-center text-center">
-              <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-2">RISK · SCORE</div>
-              <RiskGauge value={result.pct} />
-              <button
-                onClick={() => exportReport(result, mod)}
-                className="mt-5 w-full px-4 py-2 rounded-lg border border-border text-sm hover:bg-surface-2 transition"
-              >
-                ⤓ تصدير التقرير
-              </button>
-            </div>
+            <SummaryCard result={result} mod={mod} onAddToGraph={addToGraph} />
+            <RiskCard result={result} />
           </div>
 
           {/* Findings */}
@@ -224,10 +213,10 @@ function ModuleView({ mod }: { mod: ModuleDef }) {
             <div className="glass rounded-xl p-6 animate-fade-up" style={{ animationDelay: ".05s" }}>
               <h2 className="font-semibold mb-4 flex items-center gap-2">
                 <span className="w-1 h-4 bg-primary rounded glow-cyan" />
-                النتائج التفصيلية
-                <span className="ml-2 text-xs font-mono text-muted-foreground">{result.findings.length} مؤشر</span>
+                نتائج التحليل
+                <span className="text-xs font-mono text-muted-foreground mr-1">{result.findings.length} عنصر</span>
               </h2>
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {result.findings.map((f, i) => (
                   <FindingCard key={i} finding={f} />
                 ))}
@@ -235,15 +224,30 @@ function ModuleView({ mod }: { mod: ModuleDef }) {
             </div>
           )}
 
+          {/* Platforms (username) */}
+          {result.platforms && result.platforms.length > 0 && (
+            <PlatformsSection platforms={result.platforms} />
+          )}
+
+          {/* IOC extracted */}
+          {result.extracted && (
+            <ExtractedSection extracted={result.extracted} />
+          )}
+
+          {/* External links */}
+          {result.externalLinks.length > 0 && (
+            <ExternalLinksSection links={result.externalLinks} />
+          )}
+
           {/* Metadata */}
-          {result.meta.length > 0 && (
-            <div className="glass rounded-xl p-6 animate-fade-up" style={{ animationDelay: ".1s" }}>
+          {result.metadata.length > 0 && (
+            <div className="glass rounded-xl p-6 animate-fade-up" style={{ animationDelay: ".15s" }}>
               <h2 className="font-semibold mb-4 flex items-center gap-2">
                 <span className="w-1 h-4 bg-primary rounded glow-cyan" />
                 البيانات التقنية
               </h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8">
-                {result.meta.map((m) => (
+                {result.metadata.map((m) => (
                   <div key={m.k} className="flex items-center justify-between py-2.5 border-b border-border/60 text-sm">
                     <span className="text-muted-foreground">{m.k}</span>
                     <span className="font-mono text-cyan text-xs" dir="ltr">{m.v}</span>
@@ -258,94 +262,242 @@ function ModuleView({ mod }: { mod: ModuleDef }) {
   );
 }
 
-/* ── Sub-components ── */
+/* ── Sub-components ──────────────────────────────────────────────────────── */
 
-function VerdictCard({ result }: { result: AnalysisResult }) {
-  const level: Severity =
-    result.threat === "crit" ? "CRITICAL" :
-    result.threat === "warn" ? "HIGH" : "LOW";
-
-  const glowClass =
-    result.threat === "crit" ? "border-critical/40" :
-    result.threat === "warn" ? "border-warning/40" : "border-safe/40";
-
-  const gradClass =
-    result.threat === "crit" ? "from-critical/10" :
-    result.threat === "warn" ? "from-warning/10" : "from-safe/10";
+function SummaryCard({ result, mod, onAddToGraph }: { result: InvestigationResult; mod: ModuleDef; onAddToGraph: () => void }) {
+  const borderColor = result.isValid
+    ? result.riskScore > 60 ? "border-warning/40" : "border-safe/40"
+    : "border-critical/40";
+  const gradColor = result.isValid
+    ? result.riskScore > 60 ? "from-warning/8" : "from-safe/8"
+    : "from-critical/8";
 
   return (
-    <div className={`lg:col-span-2 glass rounded-xl p-6 relative overflow-hidden ${glowClass}`}>
-      <div className={`absolute inset-0 bg-gradient-to-l ${gradClass} to-transparent`} />
+    <div className={`lg:col-span-2 glass rounded-xl p-6 relative overflow-hidden border ${borderColor}`}>
+      <div className={`absolute inset-0 bg-gradient-to-l ${gradColor} to-transparent`} />
       <div className="relative">
-        <div className="flex items-center gap-2">
-          <SeverityBadge level={level} pulse={result.threat === "crit"} />
-          <span className="text-[10px] font-mono text-muted-foreground">VERDICT · LIVE ENGINE</span>
+        <div className="flex items-center gap-3 mb-3">
+          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[10px] font-mono font-semibold tracking-wider ${result.isValid ? "text-safe border-safe/40 bg-safe/10" : "text-critical border-critical/40 bg-critical/10"}`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-current" />
+            {result.isValid ? "صالح · VALID" : "غير صالح · INVALID"}
+          </span>
+          <span className="text-[10px] font-mono text-muted-foreground">
+            ثقة: {result.confidence === "high" ? "عالية" : result.confidence === "medium" ? "متوسطة" : "منخفضة"}
+          </span>
         </div>
-        <h2 className="text-2xl font-bold mt-3">{result.verdictTitle}</h2>
-        <p className="text-sm text-muted-foreground mt-2 max-w-xl">{result.verdictDesc}</p>
-        <div className="mt-6 grid grid-cols-3 gap-4">
-          {result.stats.map((s) => (
-            <div key={s.label}>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{s.label}</div>
-              <div className="text-xl font-bold font-mono mt-1">{s.value}</div>
-            </div>
-          ))}
+        <h2 className="text-lg font-bold">{result.isValid ? "تم التحليل بنجاح" : "فشل التحقق من المدخل"}</h2>
+        <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{result.summary || result.validationMsg}</p>
+        <div className="mt-5 grid grid-cols-2 gap-4">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">نوع الكيان</div>
+            <div className={`mt-1 font-mono font-bold text-${mod.hue}`}>{mod.nameAr.split(" ")[0]}</div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">أدوات OSINT</div>
+            <div className="mt-1 font-mono font-bold text-cyan">{result.externalLinks.length}</div>
+          </div>
         </div>
+        {result.isValid && (
+          <button
+            onClick={onAddToGraph}
+            className="mt-4 flex items-center gap-2 text-xs text-primary border border-primary/30 px-3 py-1.5 rounded-lg hover:bg-primary/10 transition"
+          >
+            <span>⬡</span> إضافة إلى خريطة الروابط
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-function FindingCard({ finding }: { finding: FindingItem }) {
-  const [open, setOpen] = useState(false);
-  const borderColor =
-    finding.sev === "CRITICAL" ? "border-r-critical" :
-    finding.sev === "HIGH"     ? "border-r-high" :
-    finding.sev === "MEDIUM"   ? "border-r-warning" :
-    finding.sev === "LOW"      ? "border-r-info" : "border-r-muted-foreground";
+function RiskCard({ result }: { result: InvestigationResult }) {
+  const score = result.riskScore;
+  const color = score > 70 ? "var(--critical)" : score > 40 ? "var(--warning)" : "var(--safe)";
+  const label = score > 70 ? "مرتفع" : score > 40 ? "متوسط" : "منخفض";
+  const r = 60, c = 2 * Math.PI * r, arc = c * 0.75, offset = arc * (1 - score / 100);
 
   return (
-    <div className={`bg-surface-2/50 rounded-lg border border-border ${borderColor} border-r-4 transition hover:bg-surface-2`}>
-      <button onClick={() => setOpen(!open)} className="w-full text-right p-4 flex items-start gap-3">
-        <SeverityBadge level={finding.sev as Severity} />
-        <div className="flex-1">
-          <div className="font-semibold text-sm">{finding.title}</div>
-          <div className="text-xs text-muted-foreground mt-1">{finding.desc}</div>
-        </div>
-        <span className={`text-muted-foreground text-sm transition-transform ${open ? "rotate-90" : ""}`}>‹</span>
-      </button>
-      {open && finding.evidence && (
-        <div className="px-4 pb-4">
-          <div className="bg-void/60 border border-border rounded p-3 font-mono text-xs text-cyan overflow-x-auto whitespace-pre-wrap" dir="ltr">
-            {finding.evidence}
-          </div>
-        </div>
-      )}
+    <div className="glass rounded-xl p-6 flex flex-col items-center justify-center text-center">
+      <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-2">RISK · SCORE</div>
+      <svg width={160} height={130} style={{ transform: "rotate(135deg)" }}>
+        <circle cx={80} cy={80} r={r} fill="none" stroke="oklch(0.22 0.025 248)" strokeWidth={16} strokeLinecap="round"
+          strokeDasharray={`${arc} ${c - arc}`} />
+        <circle cx={80} cy={80} r={r} fill="none" stroke={color} strokeWidth={16} strokeLinecap="round"
+          strokeDasharray={`${arc - offset} ${c - (arc - offset)}`}
+          style={{ filter: `drop-shadow(0 0 8px ${color})`, transition: "stroke-dasharray 1s" }} />
+      </svg>
+      <div className="font-mono text-4xl font-bold -mt-6" style={{ color }}>{score}</div>
+      <div className="text-sm mt-1" style={{ color }}>{label}</div>
     </div>
   );
 }
 
-/* ── Export Report ── */
-function exportReport(result: AnalysisResult, mod: ModuleDef) {
-  const lines = [
-    `# DFAS v3 — تقرير التحليل الجنائي`,
-    `## ${mod.code} · ${mod.nameAr}`,
-    ``,
-    `**النتيجة:** ${result.verdictTitle}`,
-    `**نسبة الخطر:** ${result.pct}%`,
-    ``,
-    `### البيانات التقنية`,
-    ...result.meta.map(m => `- **${m.k}:** ${m.v}`),
-    ``,
-    `### النتائج (${result.findings.length})`,
-    ...result.findings.map(f => `#### [${f.sev}] ${f.title}\n${f.desc}\n\`${f.evidence}\``),
-    ``,
-    `---`,
-    `TLP:AMBER · DFAS v3 · ISO/IEC 27037:2012`,
+function FindingCard({ finding }: { finding: Finding }) {
+  return (
+    <div className={`rounded-lg border p-3 text-sm ${STATUS_STYLES[finding.status] ?? STATUS_STYLES.neutral}`}>
+      <div className="text-[10px] uppercase tracking-wider opacity-70 mb-1">{finding.label}</div>
+      <div className="font-mono font-semibold text-xs">{finding.value}</div>
+    </div>
+  );
+}
+
+const CATEGORY_COLOR_MAP: Record<string, string> = {};
+let colorIdx = 0;
+function getCategoryColor(cat: string) {
+  if (!CATEGORY_COLOR_MAP[cat]) {
+    CATEGORY_COLOR_MAP[cat] = CATEGORY_COLORS[colorIdx % CATEGORY_COLORS.length];
+    colorIdx++;
+  }
+  return CATEGORY_COLOR_MAP[cat];
+}
+
+function PlatformsSection({ platforms }: { platforms: PlatformResult[] }) {
+  const [filter, setFilter] = useState<string>("الكل");
+  const categories = ["الكل", ...Array.from(new Set(platforms.map((p) => p.categoryAr)))];
+  const filtered = filter === "الكل" ? platforms : platforms.filter((p) => p.categoryAr === filter);
+
+  return (
+    <div className="glass rounded-xl p-6 animate-fade-up" style={{ animationDelay: ".08s" }}>
+      <div className="flex flex-wrap items-center gap-3 mb-5">
+        <h2 className="font-semibold flex items-center gap-2">
+          <span className="w-1 h-4 bg-primary rounded glow-cyan" />
+          منصات التحقق
+          <span className="text-xs font-mono text-muted-foreground">{platforms.length} منصة</span>
+        </h2>
+        <div className="flex flex-wrap gap-1.5 mr-auto">
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setFilter(cat)}
+              className={`text-[10px] px-2.5 py-1 rounded-full border transition ${filter === cat ? "bg-primary/20 border-primary/50 text-primary" : "border-border text-muted-foreground hover:border-primary/30"}`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+        {filtered.map((p) => (
+          <a
+            key={p.name}
+            href={p.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-border hover:border-primary/40 hover:bg-surface-2 transition group text-xs"
+          >
+            <span className="text-base">{p.icon}</span>
+            <div className="min-w-0">
+              <div className="font-medium text-[11px] truncate group-hover:text-cyan transition">{p.name}</div>
+              <div className={`text-[9px] px-1.5 py-0.5 rounded border mt-0.5 inline-block ${getCategoryColor(p.categoryAr)}`}>
+                {p.categoryAr}
+              </div>
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ExtractedSection({ extracted }: { extracted: ExtractedIOC }) {
+  const sections: { key: keyof ExtractedIOC; label: string; color: string }[] = [
+    { key: "ips",           label: "عناوين IP",    color: "warning" },
+    { key: "domains",       label: "نطاقات",       color: "info" },
+    { key: "emails",        label: "بريد",         color: "cyan" },
+    { key: "urls",          label: "روابط URL",    color: "safe" },
+    { key: "md5",           label: "MD5",          color: "high" },
+    { key: "sha1",          label: "SHA-1",        color: "high" },
+    { key: "sha256",        label: "SHA-256",      color: "critical" },
+    { key: "btcAddresses",  label: "BTC",          color: "warning" },
+    { key: "ethAddresses",  label: "ETH",          color: "info" },
+    { key: "cves",          label: "CVEs",         color: "critical" },
   ];
-  const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `DFAS-Report-${mod.code}-${Date.now()}.md`;
-  a.click();
+
+  const hasData = sections.some((s) => (extracted[s.key] as string[]).length > 0);
+  if (!hasData) return null;
+
+  return (
+    <div className="glass rounded-xl p-6 animate-fade-up" style={{ animationDelay: ".1s" }}>
+      <h2 className="font-semibold mb-5 flex items-center gap-2">
+        <span className="w-1 h-4 bg-primary rounded glow-cyan" />
+        المؤشرات المستخرجة
+      </h2>
+      <div className="space-y-4">
+        {sections.map(({ key, label, color }) => {
+          const items = extracted[key] as string[];
+          if (items.length === 0) return null;
+          return (
+            <div key={key}>
+              <div className={`text-[10px] font-mono uppercase tracking-wider text-${color} mb-2`}>
+                {label} ({items.length})
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {items.map((v, i) => (
+                  <span key={i} className={`font-mono text-[11px] px-2.5 py-1 rounded border bg-${color}/8 border-${color}/30 text-${color}`} dir="ltr">
+                    {v.length > 60 ? v.substring(0, 57) + "..." : v}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ExternalLinksSection({ links }: { links: ExternalLink[] }) {
+  const [filter, setFilter] = useState<string>("الكل");
+  const categories = ["الكل", ...Array.from(new Set(links.map((l) => l.categoryAr)))];
+  const filtered = filter === "الكل" ? links : links.filter((l) => l.categoryAr === filter);
+
+  return (
+    <div className="glass rounded-xl p-6 animate-fade-up" style={{ animationDelay: ".12s" }}>
+      <div className="flex flex-wrap items-center gap-3 mb-5">
+        <h2 className="font-semibold flex items-center gap-2">
+          <span className="w-1 h-4 bg-primary rounded glow-cyan" />
+          أدوات OSINT الخارجية
+          <span className="text-xs font-mono text-muted-foreground">{links.length} أداة</span>
+        </h2>
+        <div className="flex flex-wrap gap-1.5 mr-auto">
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setFilter(cat)}
+              className={`text-[10px] px-2.5 py-1 rounded-full border transition ${filter === cat ? "bg-primary/20 border-primary/50 text-primary" : "border-border text-muted-foreground hover:border-primary/30"}`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {filtered.map((link) => (
+          <a
+            key={link.name}
+            href={link.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group flex items-start gap-3 p-4 rounded-lg border border-border hover:border-primary/40 hover:bg-surface-2/60 transition"
+          >
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm group-hover:text-cyan transition">{link.name}</span>
+                {link.free && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-safe/10 border border-safe/30 text-safe font-mono">FREE</span>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">{link.description}</p>
+              <div className={`mt-2 text-[10px] inline-block px-2 py-0.5 rounded border ${getCategoryColor(link.categoryAr)}`}>
+                {link.categoryAr}
+              </div>
+            </div>
+            <span className="text-muted-foreground group-hover:text-primary transition shrink-0">↗</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
 }
