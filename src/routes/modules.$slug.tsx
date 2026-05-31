@@ -2,6 +2,7 @@ import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useState } from "react";
 import { MODULES, HUE_MAP, type ModuleDef } from "@/lib/dfas-data";
 import { runInvestigation, SAMPLES, type InvestigationResult, type Finding, type PlatformResult, type ExternalLink, type ExtractedIOC } from "@/engines/osint-engines";
+import { apiInvestigate, hasBackend } from "@/lib/api";
 
 // ─── Utility helpers ─────────────────────────────────────────────────────────
 
@@ -123,6 +124,7 @@ function InvestigationView({ mod }: { mod: ModuleDef }) {
   const [input, setInput] = useState("");
   const [result, setResult] = useState<InvestigationResult | null>(null);
   const [step, setStep] = useState(0);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const steps = mod.slug === "ioc"
     ? ["استخراج IPs", "استخراج النطاقات", "استخراج البريد", "استخراج الهاشات", "استخراج العملات", "استخراج CVEs"]
@@ -133,24 +135,33 @@ function InvestigationView({ mod }: { mod: ModuleDef }) {
     setPhase("running");
     setStep(0);
     setResult(null);
+    setErrorMsg(null);
 
-    // Run animation and real investigation in parallel
+    let animTimer: ReturnType<typeof setInterval> | null = null;
+
     const animationDone = new Promise<void>((resolve) => {
       let i = 0;
-      const timer = setInterval(() => {
+      animTimer = setInterval(() => {
         i++;
         setStep(i);
-        if (i >= steps.length) { clearInterval(timer); resolve(); }
+        if (i >= steps.length) { clearInterval(animTimer!); resolve(); }
       }, 360);
     });
 
-    const [res] = await Promise.all([
-      runInvestigation(mod.type, input),
-      animationDone,
-    ]);
+    try {
+      const investigateFn = hasBackend()
+        ? () => apiInvestigate(mod.type, input).then((r) => r.result)
+        : () => runInvestigation(mod.type, input);
 
-    setResult(res);
-    setPhase("done");
+      const [res] = await Promise.all([investigateFn(), animationDone]);
+      setResult(res);
+      setPhase("done");
+    } catch (err) {
+      if (animTimer) clearInterval(animTimer);
+      setStep(steps.length);
+      setErrorMsg(err instanceof Error ? err.message : "حدث خطأ غير متوقع");
+      setPhase("idle");
+    }
   }
 
   function reset() {
@@ -158,34 +169,45 @@ function InvestigationView({ mod }: { mod: ModuleDef }) {
     setInput("");
     setResult(null);
     setStep(0);
+    setErrorMsg(null);
   }
 
   function loadSample() {
     setInput(SAMPLES[mod.type] ?? "");
   }
 
-  function addToGraph() {
-    try {
-      const raw = localStorage.getItem("voidsinт-graph") ?? "{}";
-      const graph = JSON.parse(raw);
-      if (!graph.nodes) graph.nodes = [];
-      if (!graph.edges) graph.edges = [];
-      const id = `${mod.type}-${Date.now()}`;
-      graph.nodes.push({
-        id,
-        type: mod.type,
-        value: input,
-        label: input.substring(0, 20),
-        x: 200 + Math.random() * 400,
-        y: 150 + Math.random() * 300,
-        hue: mod.hue,
-        icon: mod.icon,
-        addedAt: new Date().toISOString(),
-      });
-      localStorage.setItem("voidsinт-graph", JSON.stringify(graph));
-      alert("✓ تم إضافة الكيان إلى خريطة الروابط");
-    } catch {
-      alert("تعذّر الإضافة إلى الخريطة");
+  async function addToGraph() {
+    const nodeId = `${mod.type}-${Date.now()}`;
+    const nodeData = {
+      id: nodeId,
+      type: mod.type,
+      value: input,
+      label: input.substring(0, 18),
+      x: 200 + Math.random() * 400,
+      y: 150 + Math.random() * 300,
+      hue: mod.hue,
+      icon: mod.icon,
+    };
+
+    if (hasBackend()) {
+      try {
+        const { apiAddGraphNode } = await import("@/lib/api");
+        await apiAddGraphNode(nodeData);
+        alert("✓ تم حفظ الكيان في قاعدة البيانات وخريطة الروابط");
+      } catch {
+        alert("تعذّر الحفظ في قاعدة البيانات");
+      }
+    } else {
+      try {
+        const raw = localStorage.getItem("voidsint-graph") ?? "{}";
+        const graph = JSON.parse(raw) as { nodes?: unknown[]; edges?: unknown[] };
+        if (!graph.nodes) graph.nodes = [];
+        graph.nodes.push({ ...nodeData, addedAt: new Date().toISOString() });
+        localStorage.setItem("voidsint-graph", JSON.stringify(graph));
+        alert("✓ تم الإضافة إلى خريطة الروابط (محلي)");
+      } catch {
+        alert("تعذّر الإضافة إلى الخريطة");
+      }
     }
   }
 
@@ -234,19 +256,29 @@ function InvestigationView({ mod }: { mod: ModuleDef }) {
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button
+            type="button"
             onClick={investigate}
             disabled={phase === "running" || !input.trim()}
             className="px-6 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold glow-cyan hover:scale-[1.02] transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {phase === "running" ? "جاري التحقيق…" : "▶ بدء التحقيق"}
+            {phase === "running" ? "⏳ جاري التحقيق…" : "▶ بدء التحقيق"}
           </button>
-          <button onClick={loadSample} className="px-4 py-2.5 rounded-lg border border-primary/30 text-primary text-sm hover:bg-primary/10 transition">
+          <button type="button" onClick={loadSample} className="px-4 py-2.5 rounded-lg border border-primary/30 text-primary text-sm hover:bg-primary/10 transition">
             ← تحميل مثال
           </button>
-          <button onClick={reset} className="px-4 py-2.5 rounded-lg border border-border text-sm hover:bg-surface-2 transition">
+          <button type="button" onClick={reset} className="px-4 py-2.5 rounded-lg border border-border text-sm hover:bg-surface-2 transition">
             إعادة تعيين
           </button>
         </div>
+
+        {/* Error display */}
+        {errorMsg && (
+          <div className="mt-4 flex items-center gap-3 p-3 rounded-lg border border-critical/40 bg-critical/8 text-critical text-sm">
+            <span>✕</span>
+            <span>{errorMsg}</span>
+            <button type="button" onClick={() => setErrorMsg(null)} className="mr-auto text-xs opacity-60 hover:opacity-100">✕</button>
+          </div>
+        )}
 
         {/* Progress */}
         {phase !== "idle" && (

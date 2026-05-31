@@ -2,6 +2,15 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { MODULES } from "@/lib/dfas-data";
 import type { OsintType } from "@/lib/dfas-data";
+import {
+  hasBackend,
+  apiGetGraph,
+  apiAddGraphNode,
+  apiRemoveGraphNode,
+  apiAddGraphEdge,
+  apiRemoveGraphEdge,
+  apiResetGraph,
+} from "@/lib/api";
 
 export const Route = createFileRoute("/graph")({
   head: () => ({
@@ -13,7 +22,7 @@ export const Route = createFileRoute("/graph")({
   component: GraphPage,
 });
 
-const STORAGE_KEY = "voidsinт-graph";
+const LOCAL_KEY = "voidsint-graph";
 
 interface GraphNode {
   id: string;
@@ -48,22 +57,23 @@ const HUE_COLORS: Record<string, string> = {
   critical: "oklch(0.65 0.24 22)",
 };
 
-function loadGraph(): GraphState {
+function loadLocalGraph(): GraphState {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    const raw = localStorage.getItem(LOCAL_KEY);
+    if (raw) return JSON.parse(raw) as GraphState;
   } catch {}
   return { nodes: [], edges: [] };
 }
 
-function saveGraph(g: GraphState) {
+function saveLocalGraph(g: GraphState) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(g));
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(g));
   } catch {}
 }
 
 function GraphPage() {
-  const [graph, setGraph] = useState<GraphState>(() => loadGraph());
+  const [graph, setGraph] = useState<GraphState>({ nodes: [], edges: [] });
+  const [usingBackend, setUsingBackend] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
@@ -76,46 +86,128 @@ function GraphPage() {
   const [edgeLabel, setEdgeLabel] = useState("");
   const svgRef = useRef<SVGSVGElement>(null);
 
+  // Load graph on mount
   useEffect(() => {
-    saveGraph(graph);
-  }, [graph]);
+    if (hasBackend()) {
+      setUsingBackend(true);
+      apiGetGraph()
+        .then((data) => {
+          setGraph({
+            nodes: data.nodes.map((n) => ({
+              id: n.id,
+              type: n.type as OsintType,
+              value: n.value,
+              label: n.label,
+              x: n.x,
+              y: n.y,
+              hue: n.hue,
+              icon: n.icon,
+              addedAt: n.added_at,
+            })),
+            edges: data.edges.map((e) => ({
+              id: e.id,
+              from: e.from_node,
+              to: e.to_node,
+              label: e.label,
+            })),
+          });
+        })
+        .catch(() => {
+          // API failed — fall back to local
+          setUsingBackend(false);
+          setGraph(loadLocalGraph());
+        });
+    } else {
+      setGraph(loadLocalGraph());
+    }
+  }, []);
 
-  const addNode = () => {
+  // Persist to localStorage when not using backend
+  useEffect(() => {
+    if (!usingBackend) saveLocalGraph(graph);
+  }, [graph, usingBackend]);
+
+  const addNode = async () => {
     if (!newValue.trim()) return;
     const mod = MODULES.find((m) => m.type === newType);
     const id = `${newType}-${Date.now()}`;
-    setGraph((g) => ({
-      ...g,
-      nodes: [
-        ...g.nodes,
-        {
-          id,
-          type: newType,
-          value: newValue.trim(),
-          label: newValue.trim().substring(0, 18),
-          x: 120 + Math.random() * 560,
-          y: 100 + Math.random() * 360,
-          hue: mod?.hue ?? "cyan",
-          icon: mod?.icon ?? "◉",
-          addedAt: new Date().toISOString(),
-        },
-      ],
-    }));
+    const node: GraphNode = {
+      id,
+      type: newType,
+      value: newValue.trim(),
+      label: newValue.trim().substring(0, 18),
+      x: 120 + Math.random() * 560,
+      y: 100 + Math.random() * 360,
+      hue: mod?.hue ?? "cyan",
+      icon: mod?.icon ?? "◉",
+      addedAt: new Date().toISOString(),
+    };
+
+    if (usingBackend) {
+      try {
+        const saved = await apiAddGraphNode({
+          id: node.id,
+          type: node.type,
+          value: node.value,
+          label: node.label,
+          x: node.x,
+          y: node.y,
+          hue: node.hue,
+          icon: node.icon,
+        });
+        node.addedAt = saved.added_at;
+        node.id = saved.id;
+      } catch {
+        // continue with local node
+      }
+    }
+
+    setGraph((g) => ({ ...g, nodes: [...g.nodes, node] }));
     setNewValue("");
     setShowAddForm(false);
   };
 
-  const addEdge = () => {
+  const addEdge = async () => {
     if (!edgeFrom || !edgeTo || edgeFrom === edgeTo) return;
     const id = `edge-${Date.now()}`;
-    setGraph((g) => ({ ...g, edges: [...g.edges, { id, from: edgeFrom, to: edgeTo, label: edgeLabel || "مرتبط" }] }));
+    const edgeLabel2 = edgeLabel || "مرتبط";
+
+    if (usingBackend) {
+      try {
+        const saved = await apiAddGraphEdge({
+          id,
+          from_node: edgeFrom,
+          to_node: edgeTo,
+          label: edgeLabel2,
+        });
+        setGraph((g) => ({
+          ...g,
+          edges: [...g.edges, { id: saved.id, from: saved.from_node, to: saved.to_node, label: saved.label }],
+        }));
+      } catch {
+        setGraph((g) => ({ ...g, edges: [...g.edges, { id, from: edgeFrom, to: edgeTo, label: edgeLabel2 }] }));
+      }
+    } else {
+      setGraph((g) => ({ ...g, edges: [...g.edges, { id, from: edgeFrom, to: edgeTo, label: edgeLabel2 }] }));
+    }
+
     setEdgeFrom("");
     setEdgeTo("");
     setEdgeLabel("");
     setShowEdgeForm(false);
   };
 
-  const removeNode = (id: string) => {
+  const removeNode = async (id: string) => {
+    if (usingBackend) {
+      try { await apiRemoveGraphNode(id); } catch {}
+    }
+    // Also remove connected edges
+    if (usingBackend) {
+      const edgeIds = graph.edges.filter((e) => e.from === id || e.to === id).map((e) => e.id);
+      for (const eid of edgeIds) {
+        try { await apiRemoveGraphEdge(eid); } catch {}
+      }
+    }
     setGraph((g) => ({
       nodes: g.nodes.filter((n) => n.id !== id),
       edges: g.edges.filter((e) => e.from !== id && e.to !== id),
@@ -123,11 +215,13 @@ function GraphPage() {
     if (selected === id) setSelected(null);
   };
 
-  const clearGraph = () => {
-    if (confirm("هل تريد مسح الخريطة بالكامل؟")) {
-      setGraph({ nodes: [], edges: [] });
-      setSelected(null);
+  const clearGraph = async () => {
+    if (!confirm("هل تريد مسح الخريطة بالكامل؟")) return;
+    if (usingBackend) {
+      try { await apiResetGraph(); } catch {}
     }
+    setGraph({ nodes: [], edges: [] });
+    setSelected(null);
   };
 
   const getNodeById = useCallback((id: string) => graph.nodes.find((n) => n.id === id), [graph.nodes]);
@@ -173,18 +267,23 @@ function GraphPage() {
         <div>
           <div className="text-xs font-mono text-cyan tracking-widest">OSINT · INVESTIGATION · GRAPH</div>
           <h1 className="text-xl lg:text-2xl font-bold mt-0.5">خريطة الروابط التحقيقية</h1>
+          <div className="text-[10px] font-mono mt-1">
+            {usingBackend
+              ? <span className="text-safe">● قاعدة بيانات متصلة</span>
+              : <span className="text-muted-foreground">● وضع محلي</span>}
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setShowAddForm(!showAddForm)} className="px-4 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-sm glow-cyan hover:scale-[1.02] transition">
+          <button type="button" onClick={() => setShowAddForm(!showAddForm)} className="px-4 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-sm glow-cyan hover:scale-[1.02] transition">
             + إضافة كيان
           </button>
           {graph.nodes.length > 1 && (
-            <button onClick={() => setShowEdgeForm(!showEdgeForm)} className="px-4 py-2 rounded-lg border border-info/40 text-info text-sm hover:bg-info/10 transition">
+            <button type="button" onClick={() => setShowEdgeForm(!showEdgeForm)} className="px-4 py-2 rounded-lg border border-info/40 text-info text-sm hover:bg-info/10 transition">
               ⟶ ربط كيانين
             </button>
           )}
           {graph.nodes.length > 0 && (
-            <button onClick={clearGraph} className="px-4 py-2 rounded-lg border border-critical/40 text-critical text-sm hover:bg-critical/10 transition">
+            <button type="button" onClick={clearGraph} className="px-4 py-2 rounded-lg border border-critical/40 text-critical text-sm hover:bg-critical/10 transition">
               ✕ مسح الخريطة
             </button>
           )}
@@ -214,10 +313,10 @@ function GraphPage() {
               className="flex-1 min-w-40 bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
               onKeyDown={(e) => e.key === "Enter" && addNode()}
             />
-            <button onClick={addNode} className="px-5 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold">
+            <button type="button" onClick={addNode} className="px-5 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold">
               إضافة
             </button>
-            <button onClick={() => setShowAddForm(false)} className="px-4 py-2 rounded-lg border border-border text-sm">
+            <button type="button" onClick={() => setShowAddForm(false)} className="px-4 py-2 rounded-lg border border-border text-sm">
               إلغاء
             </button>
           </div>
@@ -242,10 +341,10 @@ function GraphPage() {
             <input type="text" value={edgeLabel} onChange={(e) => setEdgeLabel(e.target.value)}
               placeholder="تسمية الرابط..."
               className="flex-1 min-w-28 bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary" />
-            <button onClick={addEdge} className="px-5 py-2 rounded-lg bg-info text-primary-foreground text-sm font-semibold">
+            <button type="button" onClick={addEdge} className="px-5 py-2 rounded-lg bg-info text-primary-foreground text-sm font-semibold">
               ربط
             </button>
-            <button onClick={() => setShowEdgeForm(false)} className="px-4 py-2 rounded-lg border border-border text-sm">
+            <button type="button" onClick={() => setShowEdgeForm(false)} className="px-4 py-2 rounded-lg border border-border text-sm">
               إلغاء
             </button>
           </div>
@@ -263,7 +362,7 @@ function GraphPage() {
                 أضف كيانات تحقيق من الزر أعلاه، أو من صفحة التحقيق بالنقر على "إضافة إلى خريطة الروابط".
               </p>
               <div className="mt-5 flex gap-3">
-                <button onClick={() => setShowAddForm(true)} className="px-5 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold text-sm glow-cyan">
+                <button type="button" onClick={() => setShowAddForm(true)} className="px-5 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold text-sm glow-cyan">
                   + إضافة أول كيان
                 </button>
                 <Link to="/modules" className="px-5 py-2.5 rounded-lg border border-border text-sm">
@@ -374,11 +473,11 @@ function GraphPage() {
                   to="/modules/$slug"
                   params={{ slug: selectedNode.type }}
                   className="block w-full text-center px-3 py-2 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs hover:bg-primary/20 transition"
-                  onClick={() => {}}
                 >
                   تحقيق →
                 </Link>
                 <button
+                  type="button"
                   onClick={() => removeNode(selectedNode.id)}
                   className="block w-full text-center px-3 py-2 rounded-lg border border-critical/30 text-critical text-xs hover:bg-critical/10 transition"
                 >
@@ -396,6 +495,7 @@ function GraphPage() {
                 {graph.nodes.map((node) => (
                   <button
                     key={node.id}
+                    type="button"
                     onClick={() => setSelected(node.id)}
                     className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs transition text-right ${selected === node.id ? "bg-primary/10 border border-primary/30" : "hover:bg-surface-2"}`}
                   >
