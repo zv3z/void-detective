@@ -1,34 +1,43 @@
-name: Deploy to Cloudflare Pages
+name: Deploy VoidSINT to GitHub Pages
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    name: Deploy VoidSINT
-    permissions:
-      contents: read
-      deployments: write
+    name: Build & Deploy
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Build VoidSINT
-        run: npm run build
+      - name: Build static site for GitHub Pages
+        run: npm run build:gh
 
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
+      - name: Copy favicon assets
+        run: |
+          cp favicon.ico dist/gh/ 2>/dev/null || true
+          cp favicon.svg dist/gh/ 2>/dev/null || true
+
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist/client --project-name=voidsint --commit-dirty=true
+          folder: dist/gh
+          branch: gh-pages
+          clean: true
+          commit-message: "deploy: VoidSINT static build from ${{ github.sha }}"
