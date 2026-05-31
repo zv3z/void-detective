@@ -159,7 +159,7 @@ const USERNAME_URLS: Record<string, string> = {
   "Gravatar":       "https://gravatar.com/{}",
 };
 
-export function investigateUsername(raw: string): InvestigationResult {
+export async function investigateUsername(raw: string): Promise<InvestigationResult> {
   const username = raw.replace(/^@/, "").trim();
   const isValid = username.length >= 1 && username.length <= 50 && /^[a-zA-Z0-9._-]+$/.test(username);
 
@@ -189,6 +189,42 @@ export function investigateUsername(raw: string): InvestigationResult {
     { label: "المنصات المفحوصة", value: `${platforms.length} منصة`,                    status: "success" },
   ];
 
+  const metadata: { k: string; v: string }[] = [
+    { k: "اسم المستخدم",     v: username },
+    { k: "بصيغة @",          v: "@" + username },
+    { k: "المنصات",          v: platforms.length.toString() },
+    { k: "نوع الكيان",       v: "Username" },
+  ];
+
+  // Real GitHub verification (public API, no auth required)
+  let liveDataBadge = false;
+  try {
+    const resp = await fetch(`https://api.github.com/users/${username}`, {
+      headers: { Accept: "application/vnd.github.v3+json" },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (resp.ok) {
+      const gh = await resp.json() as {
+        name?: string; bio?: string; followers?: number;
+        public_repos?: number; company?: string; location?: string;
+        created_at?: string; blog?: string;
+      };
+      liveDataBadge = true;
+      findings.push({ label: "GitHub موجود",    value: "✓ حساب موجود",          status: "success" });
+      if (gh.name)          findings.push({ label: "الاسم الحقيقي",    value: gh.name,                  status: "info"    });
+      if (gh.followers != null) findings.push({ label: "المتابعون",    value: gh.followers.toLocaleString(), status: "info" });
+      if (gh.public_repos != null) findings.push({ label: "المستودعات", value: gh.public_repos.toLocaleString(), status: "info" });
+      if (gh.location)      findings.push({ label: "الموقع",           value: gh.location,              status: "info"    });
+      if (gh.company)       findings.push({ label: "الشركة",           value: gh.company,               status: "info"    });
+      if (gh.created_at)    metadata.push({ k: "تاريخ إنشاء GitHub",   v: gh.created_at.split("T")[0]  });
+      if (gh.blog)          metadata.push({ k: "الموقع الشخصي",        v: gh.blog                      });
+    } else if (resp.status === 404) {
+      findings.push({ label: "GitHub",         value: "✗ حساب غير موجود",        status: "neutral" });
+    }
+  } catch {
+    // GitHub API unavailable — continue without live data
+  }
+
   const externalLinks: ExternalLink[] = [
     { name: "WhatsMyName",   url: `https://whatsmyname.app/?q=${username}`,                    category: "Username", categoryAr: "بحث أسماء",   free: true,  description: "بحث شامل عبر المنصات" },
     { name: "Namecheckr",    url: `https://namecheckr.com/`,                                   category: "Username", categoryAr: "بحث أسماء",   free: true,  description: "فحص توفر الاسم" },
@@ -200,15 +236,9 @@ export function investigateUsername(raw: string): InvestigationResult {
   return {
     input: raw, normalized: username, entityType: "username",
     isValid: true, validationMsg: "اسم مستخدم صالح",
-    summary: `تم إنشاء ${platforms.length} رابط للتحقق من حضور "@${username}" عبر المنصات المختلفة.`,
-    confidence: "high", riskScore: 45, findings, platforms, externalLinks,
-    metadata: [
-      { k: "اسم المستخدم",     v: username },
-      { k: "بصيغة @",          v: "@" + username },
-      { k: "المنصات",          v: platforms.length.toString() },
-      { k: "نوع الكيان",       v: "Username" },
-    ],
-    steps: ["تطبيع الاسم", "التحقق من الصيغة", "توليد روابط المنصات", "تحليل الخصائص", "تجهيز الأدوات"],
+    summary: `تم إنشاء ${platforms.length} رابط للتحقق من حضور "@${username}" عبر المنصات المختلفة.${liveDataBadge ? " · بيانات GitHub مباشرة." : ""}`,
+    confidence: "high", riskScore: 45, findings, platforms, externalLinks, metadata,
+    steps: ["تطبيع الاسم", "التحقق من الصيغة", "فحص GitHub Live", "توليد روابط المنصات", "تجهيز الأدوات"],
   };
 }
 
@@ -270,7 +300,7 @@ export function investigateEmail(raw: string): InvestigationResult {
 
 // ─── IP Engine ───────────────────────────────────────────────────────────────
 
-export function investigateIP(raw: string): InvestigationResult {
+export async function investigateIP(raw: string): Promise<InvestigationResult> {
   const ip = raw.trim();
   const isIPv4 = isValidIPv4(ip);
   const isIPv6 = isValidIPv6(ip);
@@ -291,30 +321,66 @@ export function investigateIP(raw: string): InvestigationResult {
   const isLoopback = ip === "127.0.0.1" || ip === "::1";
 
   const findings: Finding[] = [
-    { label: "النوع",           value: isIPv4 ? "IPv4" : "IPv6",                                                  status: "info" },
-    { label: "النطاق",          value: isLoopback ? "Loopback" : isPrivate ? "شبكة خاصة (Private)" : "عنوان عام (Public)", status: isPrivate ? "warning" : "info" },
-    { label: "قابلية الفحص",   value: isPrivate ? "لا (شبكة محلية)" : "نعم (عنوان عام)",                         status: isPrivate ? "warning" : "success" },
+    { label: "النوع",         value: isIPv4 ? "IPv4" : "IPv6",                                                                      status: "info"    },
+    { label: "النطاق",        value: isLoopback ? "Loopback" : isPrivate ? "شبكة خاصة (Private)" : "عنوان عام (Public)",           status: isPrivate ? "warning" : "info" },
+    { label: "قابلية الفحص", value: isPrivate ? "لا (شبكة محلية)" : "نعم (عنوان عام)",                                            status: isPrivate ? "warning" : "success" },
   ];
 
   if (isIPv4 && !isPrivate) {
     const o = ip.split(".").map(Number);
-    if (o[0] === 8 && (o[1] === 8 || o[1] === 4)) {
+    if (o[0] === 8 && (o[1] === 8 || o[1] === 4))
       findings.push({ label: "مزود محتمل", value: "Google DNS / Services", status: "info" });
-    }
-    if ((o[0] === 1 && o[1] === 1) || (o[0] === 1 && o[1] === 0)) {
+    if ((o[0] === 1 && o[1] === 1) || (o[0] === 1 && o[1] === 0))
       findings.push({ label: "مزود محتمل", value: "Cloudflare DNS", status: "info" });
+  }
+
+  const metadata: { k: string; v: string }[] = [
+    { k: "عنوان IP",   v: ip },
+    { k: "الإصدار",    v: isIPv4 ? "IPv4" : "IPv6" },
+    { k: "النطاق",     v: isLoopback ? "Loopback" : isPrivate ? "Private" : "Public" },
+    { k: "نوع الكيان", v: "IP Address" },
+  ];
+
+  // Real geolocation via ipapi.co — free, CORS-enabled, no API key needed
+  let geoSummary = "";
+  if (isIPv4 && !isPrivate && !isLoopback) {
+    try {
+      const resp = await fetch(`https://ipapi.co/${ip}/json/`, {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (resp.ok) {
+        const geo = await resp.json() as {
+          city?: string; region?: string; country_name?: string;
+          org?: string; timezone?: string;
+          latitude?: number; longitude?: number;
+          currency?: string; languages?: string;
+        };
+        if (geo.country_name) {
+          findings.push({ label: "الدولة",          value: geo.country_name,                  status: "success" });
+          geoSummary = geo.country_name;
+        }
+        if (geo.region)       findings.push({ label: "المنطقة/الولاية", value: geo.region,       status: "info" });
+        if (geo.city)         findings.push({ label: "المدينة",         value: geo.city,         status: "info" });
+        if (geo.org)          findings.push({ label: "المزود (ASN)",    value: geo.org,          status: "info" });
+        if (geo.timezone)     findings.push({ label: "المنطقة الزمنية", value: geo.timezone,     status: "neutral" });
+        if (geo.latitude && geo.longitude)
+          metadata.push({ k: "الإحداثيات", v: `${geo.latitude}, ${geo.longitude}` });
+        if (geo.currency)     metadata.push({ k: "العملة",    v: geo.currency });
+      }
+    } catch {
+      // ipapi.co unavailable — continue without geolocation
     }
   }
 
   const externalLinks: ExternalLink[] = [
-    { name: "Shodan",       url: `https://shodan.io/host/${ip}`,                                             category: "Recon",       categoryAr: "استطلاع",   free: false, description: "فحص المنافذ والخدمات" },
-    { name: "AbuseIPDB",   url: `https://www.abuseipdb.com/check/${ip}`,                                    category: "Reputation",  categoryAr: "سمعة",      free: true,  description: "تقارير الإساءة والسمعة" },
-    { name: "VirusTotal",  url: `https://virustotal.com/gui/ip-address/${ip}`,                              category: "Threat Intel",categoryAr: "استخبارات", free: true,  description: "فحص محركات الأمان" },
-    { name: "IPInfo.io",   url: `https://ipinfo.io/${ip}`,                                                  category: "Geo",         categoryAr: "موقع",      free: true,  description: "الموقع الجغرافي والASN" },
-    { name: "Censys",      url: `https://search.censys.io/hosts/${ip}`,                                     category: "Recon",       categoryAr: "استطلاع",   free: true,  description: "بيانات البنية التحتية" },
-    { name: "Gray Noise",  url: `https://www.greynoise.io/viz/ip/${ip}`,                                    category: "Threat Intel",categoryAr: "استخبارات", free: true,  description: "تحليل سلوك الـ IP" },
-    { name: "Talos Intel", url: `https://talosintelligence.com/reputation_center/lookup?search=${ip}`,      category: "Reputation",  categoryAr: "سمعة",      free: true,  description: "بيانات Cisco Talos" },
-    { name: "MXToolbox",   url: `https://mxtoolbox.com/SuperTool.aspx?action=blacklist%3a${ip}`,            category: "Reputation",  categoryAr: "سمعة",      free: true,  description: "فحص القائمة السوداء" },
+    { name: "Shodan",       url: `https://shodan.io/host/${ip}`,                                            category: "Recon",        categoryAr: "استطلاع",   free: false, description: "فحص المنافذ والخدمات" },
+    { name: "AbuseIPDB",    url: `https://www.abuseipdb.com/check/${ip}`,                                   category: "Reputation",   categoryAr: "سمعة",      free: true,  description: "تقارير الإساءة والسمعة" },
+    { name: "VirusTotal",   url: `https://virustotal.com/gui/ip-address/${ip}`,                             category: "Threat Intel", categoryAr: "استخبارات", free: true,  description: "فحص محركات الأمان" },
+    { name: "IPInfo.io",    url: `https://ipinfo.io/${ip}`,                                                 category: "Geo",          categoryAr: "موقع",      free: true,  description: "الموقع الجغرافي والASN" },
+    { name: "Censys",       url: `https://search.censys.io/hosts/${ip}`,                                    category: "Recon",        categoryAr: "استطلاع",   free: true,  description: "بيانات البنية التحتية" },
+    { name: "Gray Noise",   url: `https://www.greynoise.io/viz/ip/${ip}`,                                   category: "Threat Intel", categoryAr: "استخبارات", free: true,  description: "تحليل سلوك الـ IP" },
+    { name: "Talos Intel",  url: `https://talosintelligence.com/reputation_center/lookup?search=${ip}`,     category: "Reputation",   categoryAr: "سمعة",      free: true,  description: "بيانات Cisco Talos" },
+    { name: "MXToolbox",    url: `https://mxtoolbox.com/SuperTool.aspx?action=blacklist%3a${ip}`,           category: "Reputation",   categoryAr: "سمعة",      free: true,  description: "فحص القائمة السوداء" },
   ];
 
   return {
@@ -322,23 +388,17 @@ export function investigateIP(raw: string): InvestigationResult {
     isValid: true, validationMsg: `عنوان ${isIPv4 ? "IPv4" : "IPv6"} صالح`,
     summary: isPrivate
       ? `"${ip}" — عنوان شبكة خاصة، لا يمكن استطلاعه خارجياً.`
-      : `تحليل "${ip}" — عنوان عام. تجهيز ${externalLinks.length} أداة للاستطلاع.`,
+      : `تحليل "${ip}" — عنوان عام${geoSummary ? ` · ${geoSummary}` : ""}. تجهيز ${externalLinks.length} أداة للاستطلاع.`,
     confidence: isPrivate ? "medium" : "high",
     riskScore: isPrivate ? 10 : 50,
-    findings, externalLinks,
-    metadata: [
-      { k: "عنوان IP",    v: ip },
-      { k: "الإصدار",     v: isIPv4 ? "IPv4" : "IPv6" },
-      { k: "النطاق",      v: isLoopback ? "Loopback" : isPrivate ? "Private" : "Public" },
-      { k: "نوع الكيان",  v: "IP Address" },
-    ],
-    steps: ["التحقق من الصيغة", "تحديد النوع والنطاق", "تجهيز الأدوات"],
+    findings, externalLinks, metadata,
+    steps: ["التحقق من الصيغة", "تحديد النوع والنطاق", "استطلاع الموقع الجغرافي Live", "تجهيز الأدوات"],
   };
 }
 
 // ─── Domain Engine ───────────────────────────────────────────────────────────
 
-export function investigateDomain(raw: string): InvestigationResult {
+export async function investigateDomain(raw: string): Promise<InvestigationResult> {
   let domain = raw.trim().toLowerCase()
     .replace(/^https?:\/\//, "")
     .split("/")[0]
@@ -362,40 +422,79 @@ export function investigateDomain(raw: string): InvestigationResult {
   const isSuspicious = suspiciousTLDs.includes(tld);
 
   const findings: Finding[] = [
-    { label: "النطاق",         value: domain,                                                                    status: "info" },
-    { label: "TLD",            value: `.${tld}`,                                                                 status: isSuspicious ? "danger" : "success" },
-    { label: "SLD",            value: sld,                                                                       status: "info" },
-    { label: "نطاق فرعي",      value: isSubdomain ? `نعم (${parts.slice(0, -2).join(".")})` : "لا",            status: "neutral" },
-    { label: "TLD المشبوه",    value: isSuspicious ? "⚠ يستخدم غالباً في النصب" : "موثوق",                    status: isSuspicious ? "danger" : "success" },
-    { label: "طول الاسم",      value: `${domain.length} حرفاً`,                                                  status: domain.length > 30 ? "warning" : "success" },
+    { label: "النطاق",      value: domain,                                                                     status: "info"                         },
+    { label: "TLD",         value: `.${tld}`,                                                                  status: isSuspicious ? "danger" : "success" },
+    { label: "SLD",         value: sld,                                                                        status: "info"                         },
+    { label: "نطاق فرعي",  value: isSubdomain ? `نعم (${parts.slice(0, -2).join(".")})` : "لا",              status: "neutral"                      },
+    { label: "TLD المشبوه", value: isSuspicious ? "⚠ يستخدم غالباً في النصب" : "موثوق",                     status: isSuspicious ? "danger" : "success" },
+    { label: "طول الاسم",  value: `${domain.length} حرفاً`,                                                   status: domain.length > 30 ? "warning" : "success" },
   ];
 
+  const metadata: { k: string; v: string }[] = [
+    { k: "النطاق",      v: domain },
+    { k: "TLD",         v: `.${tld}` },
+    { k: "SLD",         v: sld },
+    { k: "نطاق فرعي",  v: isSubdomain ? "نعم" : "لا" },
+    { k: "TLD مشبوه",  v: isSuspicious ? "نعم" : "لا" },
+    { k: "نوع الكيان", v: "Domain" },
+  ];
+
+  // Real DNS lookup via Google DNS-over-HTTPS — free, no API key needed
+  try {
+    const [aRes, mxRes, nsRes] = await Promise.all([
+      fetch(`https://dns.google/resolve?name=${domain}&type=A`, { signal: AbortSignal.timeout(6000) }),
+      fetch(`https://dns.google/resolve?name=${domain}&type=MX`, { signal: AbortSignal.timeout(6000) }),
+      fetch(`https://dns.google/resolve?name=${domain}&type=NS`, { signal: AbortSignal.timeout(6000) }),
+    ]);
+
+    if (aRes.ok) {
+      const data = await aRes.json() as { Status: number; Answer?: { type: number; data: string }[] };
+      const ips = data.Answer?.filter((r) => r.type === 1).map((r) => r.data) ?? [];
+      if (ips.length > 0) {
+        findings.push({ label: "سجلات A (IP)", value: ips.slice(0, 3).join(", "), status: "success" });
+        metadata.push({ k: "IP الأساسي", v: ips[0] });
+      } else if (data.Status !== 0) {
+        findings.push({ label: "DNS Status", value: `NXDOMAIN (لا يوجد)`, status: "warning" });
+      }
+    }
+
+    if (mxRes.ok) {
+      const data = await mxRes.json() as { Answer?: { data: string }[] };
+      const mx = data.Answer?.map((r) => r.data.split(" ").pop() ?? r.data).slice(0, 2) ?? [];
+      if (mx.length > 0)
+        findings.push({ label: "خوادم البريد (MX)", value: mx.join(", "), status: "info" });
+    }
+
+    if (nsRes.ok) {
+      const data = await nsRes.json() as { Answer?: { data: string }[] };
+      const ns = data.Answer?.map((r) => r.data.replace(/\.$/, "")).slice(0, 2) ?? [];
+      if (ns.length > 0) {
+        findings.push({ label: "خوادم الأسماء (NS)", value: ns.join(", "), status: "info" });
+        metadata.push({ k: "NS الأساسي", v: ns[0] });
+      }
+    }
+  } catch {
+    // Google DoH unavailable — continue without DNS data
+  }
+
   const externalLinks: ExternalLink[] = [
-    { name: "WHOIS",           url: `https://who.is/whois/${domain}`,                    category: "Registrar",  categoryAr: "تسجيل",     free: true,  description: "بيانات التسجيل والتاريخ" },
-    { name: "DNSDumpster",     url: `https://dnsdumpster.com/`,                          category: "DNS",        categoryAr: "DNS",       free: true,  description: "سجلات DNS والنطاقات الفرعية" },
-    { name: "crt.sh",          url: `https://crt.sh/?q=${domain}`,                      category: "SSL",        categoryAr: "SSL",       free: true,  description: "شهادات SSL والنطاقات الفرعية" },
-    { name: "VirusTotal",      url: `https://virustotal.com/gui/domain/${domain}`,       category: "Threat Intel",categoryAr: "استخبارات",free: true,  description: "الاستخبارات الأمنية" },
-    { name: "Shodan",          url: `https://shodan.io/domain/${domain}`,                category: "Recon",      categoryAr: "استطلاع",   free: false, description: "البنية التحتية والخدمات" },
-    { name: "Wayback Machine", url: `https://web.archive.org/web/*/${domain}`,           category: "Archive",    categoryAr: "أرشيف",     free: true,  description: "النسخ الأرشيفية" },
-    { name: "BuiltWith",       url: `https://builtwith.com/${domain}`,                  category: "Tech Stack", categoryAr: "تقنيات",    free: true,  description: "تقنيات بناء الموقع" },
-    { name: "SecurityTrails",  url: `https://securitytrails.com/domain/${domain}`,      category: "DNS",        categoryAr: "DNS",       free: true,  description: "تاريخ DNS الكامل" },
-    { name: "ViewDNS",         url: `https://viewdns.info/reverseip/?host=${domain}&t=1`,category: "DNS",        categoryAr: "DNS",       free: true,  description: "الـ IP والنطاقات المشتركة" },
+    { name: "WHOIS",           url: `https://who.is/whois/${domain}`,                     category: "Registrar",   categoryAr: "تسجيل",     free: true,  description: "بيانات التسجيل والتاريخ" },
+    { name: "DNSDumpster",     url: `https://dnsdumpster.com/`,                           category: "DNS",         categoryAr: "DNS",       free: true,  description: "سجلات DNS والنطاقات الفرعية" },
+    { name: "crt.sh",          url: `https://crt.sh/?q=${domain}`,                       category: "SSL",         categoryAr: "SSL",       free: true,  description: "شهادات SSL والنطاقات الفرعية" },
+    { name: "VirusTotal",      url: `https://virustotal.com/gui/domain/${domain}`,        category: "Threat Intel",categoryAr: "استخبارات", free: true,  description: "الاستخبارات الأمنية" },
+    { name: "Shodan",          url: `https://shodan.io/domain/${domain}`,                 category: "Recon",       categoryAr: "استطلاع",   free: false, description: "البنية التحتية والخدمات" },
+    { name: "Wayback Machine", url: `https://web.archive.org/web/*/${domain}`,            category: "Archive",     categoryAr: "أرشيف",     free: true,  description: "النسخ الأرشيفية" },
+    { name: "BuiltWith",       url: `https://builtwith.com/${domain}`,                   category: "Tech Stack",  categoryAr: "تقنيات",    free: true,  description: "تقنيات بناء الموقع" },
+    { name: "SecurityTrails",  url: `https://securitytrails.com/domain/${domain}`,       category: "DNS",         categoryAr: "DNS",       free: true,  description: "تاريخ DNS الكامل" },
+    { name: "ViewDNS",         url: `https://viewdns.info/reverseip/?host=${domain}&t=1`, category: "DNS",         categoryAr: "DNS",       free: true,  description: "الـ IP والنطاقات المشتركة" },
   ];
 
   return {
     input: raw, normalized: domain, entityType: "domain",
     isValid: true, validationMsg: "نطاق صالح",
     summary: `تحليل "${domain}" — TLD: .${tld}${isSuspicious ? " ⚠ TLD مشبوه" : ""}. تجهيز ${externalLinks.length} أداة.`,
-    confidence: "high", riskScore: isSuspicious ? 65 : 30, findings, externalLinks,
-    metadata: [
-      { k: "النطاق",      v: domain },
-      { k: "TLD",         v: `.${tld}` },
-      { k: "SLD",         v: sld },
-      { k: "نطاق فرعي",  v: isSubdomain ? "نعم" : "لا" },
-      { k: "TLD مشبوه",  v: isSuspicious ? "نعم" : "لا" },
-      { k: "نوع الكيان", v: "Domain" },
-    ],
-    steps: ["تطبيع النطاق", "تحليل الأجزاء", "تقييم المخاطر", "تجهيز الأدوات"],
+    confidence: "high", riskScore: isSuspicious ? 65 : 30, findings, externalLinks, metadata,
+    steps: ["تطبيع النطاق", "تحليل الأجزاء", "استطلاع DNS Live", "تقييم المخاطر", "تجهيز الأدوات"],
   };
 }
 
@@ -670,7 +769,7 @@ export function investigateIOC(raw: string): InvestigationResult {
 
 // ─── Main Dispatcher ─────────────────────────────────────────────────────────
 
-export function runInvestigation(type: OsintType, input: string): InvestigationResult {
+export async function runInvestigation(type: OsintType, input: string): Promise<InvestigationResult> {
   switch (type) {
     case "username": return investigateUsername(input);
     case "email":    return investigateEmail(input);

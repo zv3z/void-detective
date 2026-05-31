@@ -15,7 +15,7 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
         >☰</button>
 
         <div className="flex items-center gap-2 text-xs text-muted-foreground font-mono">
-          <span>DFAS</span>
+          <span>VoidSINT</span>
           <span className="opacity-50">/</span>
           <span className="text-foreground">{crumb}</span>
         </div>
