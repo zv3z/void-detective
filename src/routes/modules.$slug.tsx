@@ -1,7 +1,73 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useState } from "react";
-import { MODULES, type ModuleDef } from "@/lib/dfas-data";
+import { MODULES, HUE_MAP, type ModuleDef } from "@/lib/dfas-data";
 import { runInvestigation, SAMPLES, type InvestigationResult, type Finding, type PlatformResult, type ExternalLink, type ExtractedIOC } from "@/engines/osint-engines";
+
+// ─── Utility helpers ─────────────────────────────────────────────────────────
+
+function copyText(text: string) {
+  navigator.clipboard?.writeText(text).catch(() => {
+    const el = document.createElement("textarea");
+    el.value = text;
+    Object.assign(el.style, { position: "fixed", opacity: "0" });
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+  });
+}
+
+function downloadFile(content: string, filename: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function toMarkdown(result: InvestigationResult, mod: ModuleDef): string {
+  const ts = new Date().toLocaleString("ar-SA");
+  const conf = result.confidence === "high" ? "عالية" : result.confidence === "medium" ? "متوسطة" : "منخفضة";
+  return [
+    `# VoidSINT · تقرير تحقيق — ${mod.nameAr}`,
+    ``,
+    `| المعلومة | القيمة |`,
+    `|----------|--------|`,
+    `| الهدف | \`${result.normalized}\` |`,
+    `| نوع الكيان | ${result.entityType} |`,
+    `| درجة الخطورة | ${result.riskScore}/100 |`,
+    `| الثقة | ${conf} |`,
+    `| الحالة | ${result.isValid ? "✓ صالح" : "✗ غير صالح"} |`,
+    `| التاريخ | ${ts} |`,
+    ``,
+    `## الملخص`,
+    ``,
+    result.summary || result.validationMsg,
+    ``,
+    ...(result.findings.length > 0 ? [
+      `## نتائج التحليل`,
+      ``,
+      ...result.findings.map((f) => `- **${f.label}:** \`${f.value}\``),
+      ``,
+    ] : []),
+    ...(result.metadata.length > 0 ? [
+      `## البيانات التقنية`,
+      ``,
+      ...result.metadata.map((m) => `- **${m.k}:** \`${m.v}\``),
+      ``,
+    ] : []),
+    ...(result.externalLinks.length > 0 ? [
+      `## أدوات OSINT الموصى بها`,
+      ``,
+      ...result.externalLinks.map((l) => `- [${l.name}](${l.url}) — ${l.description}`),
+      ``,
+    ] : []),
+    `---`,
+    `*تم إنشاؤه بواسطة [VoidSINT](https://github.com/reconurge/flowsint) · ${ts}*`,
+  ].join("\n");
+}
 
 export const Route = createFileRoute("/modules/$slug")({
   loader: ({ params }) => {
@@ -68,17 +134,21 @@ function InvestigationView({ mod }: { mod: ModuleDef }) {
     setStep(0);
     setResult(null);
 
-    let i = 0;
-    const timer = setInterval(() => {
-      i++;
-      setStep(i);
-      if (i >= steps.length) clearInterval(timer);
-    }, 380);
+    // Run animation and real investigation in parallel
+    const animationDone = new Promise<void>((resolve) => {
+      let i = 0;
+      const timer = setInterval(() => {
+        i++;
+        setStep(i);
+        if (i >= steps.length) { clearInterval(timer); resolve(); }
+      }, 360);
+    });
 
-    await new Promise((r) => setTimeout(r, steps.length * 380 + 200));
-    clearInterval(timer);
+    const [res] = await Promise.all([
+      runInvestigation(mod.type, input),
+      animationDone,
+    ]);
 
-    const res = runInvestigation(mod.type, input);
     setResult(res);
     setPhase("done");
   }
@@ -124,7 +194,7 @@ function InvestigationView({ mod }: { mod: ModuleDef }) {
       {/* Header */}
       <div className="glass rounded-xl p-6 flex items-start gap-4 animate-fade-up relative overflow-hidden">
         <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-primary/15 blur-3xl" />
-        <div className={`relative w-14 h-14 rounded-xl border flex items-center justify-center text-3xl shrink-0 border-${mod.hue}/40 bg-${mod.hue}/10 text-${mod.hue}`}>
+        <div className={`relative w-14 h-14 rounded-xl border flex items-center justify-center text-3xl shrink-0 ${HUE_MAP[mod.hue]?.border40 ?? "border-primary/40"} ${HUE_MAP[mod.hue]?.bg10 ?? "bg-surface-2"} ${HUE_MAP[mod.hue]?.text ?? "text-primary"}`}>
           {mod.icon}
         </div>
         <div className="flex-1 min-w-0 relative">
@@ -202,6 +272,29 @@ function InvestigationView({ mod }: { mod: ModuleDef }) {
       {/* Results */}
       {phase === "done" && result && (
         <>
+          {/* Export toolbar */}
+          <div className="flex flex-wrap items-center gap-2 animate-fade-up">
+            <span className="text-[10px] font-mono text-muted-foreground">تصدير التقرير:</span>
+            <button
+              onClick={() => downloadFile(JSON.stringify(result, null, 2), `voidsint-${result.entityType}-${Date.now()}.json`, "application/json")}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-safe/30 text-safe hover:bg-safe/10 transition"
+            >
+              ↓ JSON
+            </button>
+            <button
+              onClick={() => downloadFile(toMarkdown(result, mod), `voidsint-${result.entityType}-${Date.now()}.md`, "text/markdown")}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-info/30 text-info hover:bg-info/10 transition"
+            >
+              ↓ Markdown
+            </button>
+            <button
+              onClick={() => copyText(JSON.stringify(result, null, 2))}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 transition"
+            >
+              ⊞ نسخ JSON
+            </button>
+          </div>
+
           {/* Validity + Summary */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 animate-fade-up">
             <SummaryCard result={result} mod={mod} onAddToGraph={addToGraph} />
@@ -248,9 +341,18 @@ function InvestigationView({ mod }: { mod: ModuleDef }) {
               </h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8">
                 {result.metadata.map((m) => (
-                  <div key={m.k} className="flex items-center justify-between py-2.5 border-b border-border/60 text-sm">
+                  <div key={m.k} className="flex items-center justify-between py-2.5 border-b border-border/60 text-sm group">
                     <span className="text-muted-foreground">{m.k}</span>
-                    <span className="font-mono text-cyan text-xs" dir="ltr">{m.v}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-cyan text-xs" dir="ltr">{m.v}</span>
+                      <button
+                        onClick={() => copyText(m.v)}
+                        title="نسخ"
+                        className="opacity-0 group-hover:opacity-100 transition text-[10px] px-1.5 py-0.5 rounded border border-border hover:border-cyan/40 hover:text-cyan text-muted-foreground"
+                      >
+                        ⊞
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -290,7 +392,7 @@ function SummaryCard({ result, mod, onAddToGraph }: { result: InvestigationResul
         <div className="mt-5 grid grid-cols-2 gap-4">
           <div>
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">نوع الكيان</div>
-            <div className={`mt-1 font-mono font-bold text-${mod.hue}`}>{mod.nameAr.split(" ")[0]}</div>
+            <div className={`mt-1 font-mono font-bold ${HUE_MAP[mod.hue]?.text ?? "text-primary"}`}>{mod.nameAr.split(" ")[0]}</div>
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">أدوات OSINT</div>
@@ -434,9 +536,15 @@ function ExtractedSection({ extracted }: { extracted: ExtractedIOC }) {
               </div>
               <div className="flex flex-wrap gap-2">
                 {items.map((v, i) => (
-                  <span key={i} className={`font-mono text-[11px] px-2.5 py-1 rounded border bg-${color}/8 border-${color}/30 text-${color}`} dir="ltr">
+                  <button
+                    key={i}
+                    onClick={() => copyText(v)}
+                    title="انقر للنسخ"
+                    className={`font-mono text-[11px] px-2.5 py-1 rounded border cursor-pointer hover:opacity-80 transition ${HUE_MAP[color]?.bg8 ?? "bg-surface-2"} ${HUE_MAP[color]?.border30 ?? "border-border"} ${HUE_MAP[color]?.text ?? "text-foreground"}`}
+                    dir="ltr"
+                  >
                     {v.length > 60 ? v.substring(0, 57) + "..." : v}
-                  </span>
+                  </button>
                 ))}
               </div>
             </div>

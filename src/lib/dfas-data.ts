@@ -105,6 +105,24 @@ export const MODULES: ModuleDef[] = [
   },
 ];
 
+export const HUE_MAP: Record<string, {
+  text: string;
+  bg: string;
+  bg8: string;
+  bg10: string;
+  bg15: string;
+  bg20: string;
+  border30: string;
+  border40: string;
+}> = {
+  cyan:     { text: "text-cyan",     bg: "bg-cyan",     bg8: "bg-cyan/8",     bg10: "bg-cyan/10",     bg15: "bg-cyan/15",     bg20: "bg-cyan/20",     border30: "border-cyan/30",     border40: "border-cyan/40"     },
+  info:     { text: "text-info",     bg: "bg-info",     bg8: "bg-info/8",     bg10: "bg-info/10",     bg15: "bg-info/15",     bg20: "bg-info/20",     border30: "border-info/30",     border40: "border-info/40"     },
+  warning:  { text: "text-warning",  bg: "bg-warning",  bg8: "bg-warning/8",  bg10: "bg-warning/10",  bg15: "bg-warning/15",  bg20: "bg-warning/20",  border30: "border-warning/30",  border40: "border-warning/40"  },
+  safe:     { text: "text-safe",     bg: "bg-safe",     bg8: "bg-safe/8",     bg10: "bg-safe/10",     bg15: "bg-safe/15",     bg20: "bg-safe/20",     border30: "border-safe/30",     border40: "border-safe/40"     },
+  high:     { text: "text-high",     bg: "bg-high",     bg8: "bg-high/8",     bg10: "bg-high/10",     bg15: "bg-high/15",     bg20: "bg-high/20",     border30: "border-high/30",     border40: "border-high/40"     },
+  critical: { text: "text-critical", bg: "bg-critical", bg8: "bg-critical/8", bg10: "bg-critical/10", bg15: "bg-critical/15", bg20: "bg-critical/20", border30: "border-critical/30", border40: "border-critical/40" },
+};
+
 export const NAV = [
   { to: "/",          label: "الرئيسية",      icon: "⌂" },
   { to: "/dashboard", label: "لوحة التحكم",   icon: "▦" },
