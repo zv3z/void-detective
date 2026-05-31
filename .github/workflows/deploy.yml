@@ -29,10 +29,12 @@ jobs:
       - name: Build static site for GitHub Pages
         run: npm run build:gh
 
-      - name: Copy favicon assets
+      - name: Prepare deployment folder
         run: |
+          mv dist/gh/index.gh.html dist/gh/index.html
           cp favicon.ico dist/gh/ 2>/dev/null || true
           cp favicon.svg dist/gh/ 2>/dev/null || true
+          touch dist/gh/.nojekyll
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4

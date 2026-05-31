@@ -18,7 +18,7 @@ export default defineConfig({
     outDir: "dist/gh",
     emptyOutDir: true,
     rollupOptions: {
-      input: "./index.html",
+      input: "./index.gh.html",
     },
   },
 });
